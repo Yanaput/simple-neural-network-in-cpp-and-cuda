@@ -136,3 +136,15 @@ void ops_sgd(float* w, const float* g, size_t n, float lr){
 }
 
 
+// for idx
+int* ops_alloc_int(size_t n){
+    return new int[n]();
+}
+
+void ops_free_int(int* p){
+    delete[] p;
+}
+
+void upload_int(int* dst, const int* host_src, size_t n){
+    std::memcpy(dst, host_src, sizeof(float) * n);
+}

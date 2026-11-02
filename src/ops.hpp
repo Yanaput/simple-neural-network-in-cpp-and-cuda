@@ -16,3 +16,7 @@ float  ops_softmax_grad(float* dZ, const float* Z, const float* Y, int rows, int
 void   ops_col_sum(float* db, const float* dZ, int rows, int cols);
 void   ops_scale(float* x, size_t n, float s);
 void   ops_sgd(float* w, const float* g, size_t n, float lr);
+
+int*   ops_alloc_int(size_t n);
+void   ops_free_int(int *p);
+void   ops_upload_int(int* dst, const int* host_src, size_t n);
