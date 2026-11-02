@@ -3,6 +3,10 @@
 #include <cstring>
 #include <algorithm>
 
+// No device on the CPU build: nothing to select, nothing to wait for.
+void ops_init(int){}
+void ops_sync(){}
+
 float* ops_alloc(size_t n){
     return new float[n]();
 }
@@ -19,7 +23,7 @@ void ops_download(float* host_dst, const float* src, size_t n){
     std::memcpy(host_dst, src, sizeof(float) * n);
 }
 
-void ops_gemm(bool transA, bool transB, int M, int N, int K, const float* A, const float* B, float* C){
+void ops_matmul(bool transA, bool transB, int M, int N, int K, const float* A, const float* B, float* C){
     if(transB){
         for (int i = 0; i < M; i++){
             for (int j = 0; j < N; j++){
@@ -136,6 +140,13 @@ void ops_sgd(float* w, const float* g, size_t n, float lr){
 }
 
 
+// dst row r <- src row idx[r]
+void ops_gather_rows(float* dst, const float* src, const int* idx, int nrows, int cols){
+    for(int r = 0; r < nrows; r++){
+        std::memcpy(dst + (size_t)r * cols, src + (size_t)idx[r] * cols, sizeof(float) * cols);
+    }
+}
+
 // for idx
 int* ops_alloc_int(size_t n){
     return new int[n]();
@@ -145,6 +156,6 @@ void ops_free_int(int* p){
     delete[] p;
 }
 
-void upload_int(int* dst, const int* host_src, size_t n){
-    std::memcpy(dst, host_src, sizeof(float) * n);
+void ops_upload_int(int* dst, const int* host_src, size_t n){
+    std::memcpy(dst, host_src, sizeof(int) * n);
 }

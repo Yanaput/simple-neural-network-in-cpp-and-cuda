@@ -58,7 +58,7 @@ struct Linear : Module{
     Tensor forward(Tensor input) override{
         this->x = input;
         //x*w
-        ops_gemm(false, false, x.rows, this->out, this->in, this->x.data, this->W, this->y);
+        ops_matmul(false, false, x.rows, this->out, this->in, this->x.data, this->W, this->y);
         ops_add_bias(this->y, this->b, this->x.rows, this->out);
         return {this->y, this->x.rows, this->out};
     }
@@ -66,10 +66,10 @@ struct Linear : Module{
     Tensor backward(Tensor g) override{
         // dW = x^T x g, dim : in * out
         // db = col_sum of g
-        ops_gemm(true, false, this->in, this->out, g.rows, this->x.data, g.data, this->dW);
+        ops_matmul(true, false, this->in, this->out, g.rows, this->x.data, g.data, this->dW);
         ops_col_sum(this->db, g.data, g.rows, out);
         if(!need_dx) return {nullptr, g.rows, in};
-        ops_gemm(false, true, g.rows, this->in, this->out, g.data, this->W, this->dx);
+        ops_matmul(false, true, g.rows, this->in, this->out, g.data, this->W, this->dx);
         return {dx, g.rows, in};
         
     }
