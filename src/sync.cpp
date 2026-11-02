@@ -16,7 +16,7 @@ void sync_init(int* argc, char** argv[], int* rank, int* P, int* local_rank){
 #ifdef USE_MPI
     MPI_Init(argc, argv);
     MPI_Comm_rank(MPI_COMM_WORLD, rank);
-    MPI_Comm_rank(MPI_COMM_WORLD, P);
+    MPI_Comm_size(MPI_COMM_WORLD, P);
     MPI_Comm node;
     MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, *rank, MPI_INFO_NULL, &node);
     MPI_Comm_rank(node, local_rank);
@@ -53,7 +53,7 @@ void sync_gradients(Sync mode, float* grads, size_t n, const std::vector<size_t>
     host.resize(n);
 
     switch (mode){
-        case Sync::Host: //copy to host, sum across ranks, copy back
+        case Sync::Host: //copy to host, sum across ranks, then copy back
             ops_download(host.data(), grads, n);
             MPI_Allreduce(MPI_IN_PLACE, host.data(), n, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
             ops_upload(grads, host.data(), n);
@@ -72,11 +72,11 @@ void sync_gradients(Sync mode, float* grads, size_t n, const std::vector<size_t>
             MPI_Allreduce(MPI_IN_PLACE, grads, n, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         default:
             break;
+        }
 #else
     std::fprintf(stderr, "error: this mode needs an MPI build)\n");
     std::exit(1);
 #endif
-    }
 }
 
 void average_weights(float* params, size_t n){
