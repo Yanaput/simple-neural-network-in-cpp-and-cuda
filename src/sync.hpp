@@ -21,3 +21,8 @@ void  average_weights(float* params, size_t n);  // Local SGD: params <- mean ov
 
 float  sync_sum(float x);
 double sync_max(double t);   // slowest rank's time, for the timing CSV
+
+// Seconds spent inside sync_gradients / average_weights since the last call,
+// split into host<->device copies and MPI. Returns the totals and resets them.
+struct SyncTimes { double copy = 0.0, mpi = 0.0; };
+SyncTimes sync_times_take();
