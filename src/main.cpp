@@ -10,6 +10,16 @@
 #include <numeric>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <fstream>
+#include <iostream>
+
+struct EpochLog {
+    int epoch;
+    float loss;
+    double time;
+    double acc;
+};
 
 int main(int argc, char* argv[]){
     int rank, P, local_rank;
@@ -92,8 +102,11 @@ int main(int argc, char* argv[]){
     int* d_perm = ops_alloc_int(train.n);
     const int steps_per_epoch = train.n / B_global;
     std::vector<float> out_host((size_t)Bl * 10);
+    std::vector<EpochLog> log;
+
 
     for(int epoch = 0; epoch < epochs; epoch++){
+        auto start_epoch = std::chrono::steady_clock::now();;
         std::iota(perm.begin(), perm.end(), 0);
         std::shuffle(perm.begin(), perm.end(), rng);
         ops_upload_int(d_perm, perm.data(), train.n);
@@ -119,6 +132,11 @@ int main(int argc, char* argv[]){
         
 
         }
+        auto end_epoch = std::chrono::steady_clock::now();;
+        std::chrono::duration<double> elapsed_time = end_epoch - start_epoch;
+        double epoch_time = elapsed_time.count();
+
+
         int correct = 0;
         for (int s = 0; s < test.n; s += Bl) {
             int rows = std::min(Bl, test.n - s);
@@ -130,11 +148,23 @@ int main(int argc, char* argv[]){
                 correct += (pred == test.label_ids[s + i]);
             }
         }
-        if (rank == 0)
+        std::string buffer;
+        if (rank == 0){
             std::printf("epoch %d  loss %.4f  test acc %.4f\n",
                     epoch, loss_sum / steps_per_epoch, (double)correct / test.n);
-        // add timing (compute / copy / MPI) and CSV output by rank 0 
+            log.push_back(EpochLog{epoch, loss_sum / steps_per_epoch, epoch_time, (double)correct/test.n});
+        }
     }
+
+    if (rank == 0){
+        std::ofstream outfile ("log.csv");
+        outfile << "epoch, loss, time, acc\n";
+        for(int i = 0; i < log.size(); i++){
+            outfile <<std ::fixed << std::setprecision(4) << log[i].epoch << "," <<  log[i].loss << "," << log[i].time << "," << log[i].acc << "\n";
+        }
+        outfile.close();
+    }
+
 
     ops_free(dout);
     ops_free(train_x);
