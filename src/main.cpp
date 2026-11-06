@@ -16,16 +16,18 @@
 #include <filesystem>
 #include <iostream>
 #include <iomanip>
+#include <vector>
 
 
 struct EpochLog {
     int epoch;
     float loss;
     double acc;
-    double time;      // training wall time for the epoch (excludes test eval); slowest rank
-    double compute;   // time - copy - mpi, slowest rank
-    double copy;      // host<->device copies: perm upload + host-staged sync, slowest rank
-    double mpi;       // MPI_Allreduce time, slowest rank
+    double time;      // training wall time for the epoch (excludes test eval); mean over ranks
+    double compute;   // time - copy - mpi, mean over ranks
+    double copy;      // host<->device copies: perm upload + host-staged sync, mean over ranks
+    double mpi;       // MPI_Allreduce time including wait for slower ranks, mean over ranks
+    double time_max;  // training wall time of the slowest rank
 };
 
 using Clock = std::chrono::steady_clock;
@@ -34,18 +36,28 @@ static double seconds_since(Clock::time_point t0){
 }
 
 void write_log(std::string log_path, std::vector<EpochLog> log, 
-    int P, int B_global, std::string sync_name, int steps_per_epoch){
+    int P, int B_global, std::string model_name, std::string sync_name, int steps_per_epoch){
     std::ofstream outfile(log_path);
-    outfile << "epoch,P,batch,sync,loss,acc,time,compute,copy,mpi,step_ms\n";
+    outfile << "epoch,P,batch,model,sync,loss,acc,time,compute,copy,mpi,step_ms,time_max\n";
     for(size_t i = 0; i < log.size(); i++){
         const EpochLog& e = log[i];
         outfile << std::fixed
-                << e.epoch << "," << P << "," << B_global << "," << sync_name << ","
+                << e.epoch << "," << P << "," << B_global << "," << model_name << "," << sync_name << ","
                 << std::setprecision(4) << e.loss << "," << e.acc << ","
                 << std::setprecision(6) << e.time << "," << e.compute << ","
                 << e.copy << "," << e.mpi << ","
-                << e.time / steps_per_epoch * 1000.0 << "\n";
+                << e.time / steps_per_epoch * 1000.0 << "," << e.time_max << "\n";
     }
+}
+
+// Hidden-layer widths for --model; empty if the name is unknown.
+// Sized so multiply-adds per step are about 1x, 2x, 4x, and 8x of the base model.
+static std::vector<int> get_hidden(const std::string& name){
+    if(name == "1x") return {512, 256};
+    if(name == "2x") return {848, 424};
+    if(name == "4x") return {1344, 672};
+    if(name == "8x") return {2064, 1032};
+    return {};
 }
 
 int main(int argc, char* argv[]){
@@ -56,6 +68,7 @@ int main(int argc, char* argv[]){
     // defaults, overridden by --flag value pairs
     std::string data_dir = "data";        // --data
     int B_global = 128;                   // --batch      global batch, all ranks together
+    std::string model_name = "1x";        // --model      1x | 2x | 4x | 8x
     int epochs = 10;                      // --epochs
     float lr = 0.05f;                    // --lr
     unsigned seed = 42;                   // --seed       same on every rank
@@ -74,6 +87,7 @@ int main(int argc, char* argv[]){
         const char* v = argv[++a];
         if (flag == "--data") data_dir = v;
         else if(flag == "--batch") B_global = std::atoi(v);
+        else if(flag == "--model") model_name = v;
         else if(flag == "--epochs") epochs = std::atoi(v);
         else if(flag == "--lr") lr = (float)std::atof(v);
         else if(flag == "--seed") seed = (unsigned)std::strtoul(v, nullptr, 10);
@@ -83,50 +97,53 @@ int main(int argc, char* argv[]){
         else if(flag == "--log") log_path = v;
         else{
             if(rank == 0) std::fprintf(stderr, "error: unknown flag %s\n"
-                "flags: --data --batch --epochs --lr --seed --sync --sync-every --log_dir --log\n", flag.c_str());
+                "flags: --data --batch --model --epochs --lr --seed --sync --sync-every --log_dir --log\n", flag.c_str());
             sync_finalize(); return 1;
         }
     }
 
 
-    if(log_path.empty())
-        log_path = log_dir + "/log_P" + std::to_string(P) + "_B" + std::to_string(B_global) +
-                   "_" + sync_name + ".csv";
-
-    // create the folder the CSV actually goes into (--log may point outside log_dir)
-    std::filesystem::path log_parent = std::filesystem::path(log_path).parent_path();
-    if(rank == 0 && !log_parent.empty())
-        std::filesystem::create_directories(log_parent);
-
+    const std::vector<int> hidden = get_hidden(model_name);
+    if(hidden.empty()){
+        if(rank == 0) std::fprintf(stderr, "error: unknown --model '%s' (valid: 1x, 2x, 4x, 8x)\n", model_name.c_str());
+        sync_finalize(); return 1;
+    }
 
     if(B_global <= 0 || B_global % P != 0){
         if(rank == 0) std::fprintf(stderr, "error: --batch %d must be positive and divisible by P=%d\n", B_global, P);
         sync_finalize(); return 1;
     }
     if(rank == 0)
-        std::printf("data %s  batch %d (P=%d, %d per rank)  epochs %d  lr %g  seed %u  sync_every %d\n",
-                    data_dir.c_str(), B_global, P, B_global / P, epochs, lr, seed, sync_every);
+        std::printf("data %s  model %s  batch %d (P=%d, %d per rank)  epochs %d  lr %g  seed %u  sync_every %d\n",
+                    data_dir.c_str(), model_name.c_str(), B_global, P, B_global / P, epochs, lr, seed, sync_every);
 
     
     std::string tr_img = data_dir + "/emnist-digits-train-images-idx3-ubyte";
     std::string tr_lbl = data_dir + "/emnist-digits-train-labels-idx1-ubyte";
     std::string te_img = data_dir + "/emnist-digits-test-images-idx3-ubyte";
     std::string te_lbl = data_dir + "/emnist-digits-test-labels-idx1-ubyte";
-    //for quick test
-    // std::string tr_img = data_dir + "/train-images-idx3-ubyte";
-    // std::string tr_lbl = data_dir + "/train-labels-idx1-ubyte";
-    // std::string te_img = data_dir + "/t10k-images-idx3-ubyte";
-    // std::string te_lbl = data_dir + "/t10k-labels-idx1-ubyte";
 
     Sequential model;
     const int Bl = B_global / P;
 
-    model.add(new Linear(784, 512, Bl, false));
-    model.add(new ReLu(512, Bl));
-    model.add(new Linear(512, 256, Bl));
-    model.add(new ReLu(256, Bl));
-    model.add(new Linear(256, 10, Bl));
+    int in = 784;
+    for(size_t l = 0; l < hidden.size(); l++){
+        model.add(new Linear(in, hidden[l], Bl, l > 0));   // the first layer needs no dx
+        model.add(new ReLu(hidden[l], Bl));
+        in = hidden[l];
+    }
+    model.add(new Linear(in, 10, Bl));
     model.allocate(seed);
+
+    if(log_path.empty())
+        log_path = log_dir + "/log_P" + std::to_string(P) + "_B" + std::to_string(B_global) +
+                   "_" + model_name + "_params" + std::to_string(model.n_params) +
+                   "_" + sync_name + ".csv";
+
+    // create the folder the CSV actually goes into (--log may point outside log_dir)
+    std::filesystem::path log_parent = std::filesystem::path(log_path).parent_path();
+    if(rank == 0 && !log_parent.empty())
+        std::filesystem::create_directories(log_parent);
 
     float* d_dout = ops_alloc((size_t)Bl * 10);
     
@@ -196,11 +213,13 @@ int main(int argc, char* argv[]){
         double t_copy = perm_copy + st.copy;
         double t_mpi = st.mpi;
         double t_compute = epoch_time - t_copy - t_mpi;
-        // every rank must call these (collectives); each is the slowest rank's value
-        epoch_time = sync_max(epoch_time);
-        t_compute = sync_max(t_compute);
-        t_copy = sync_max(t_copy);
-        t_mpi = sync_max(t_mpi);
+        // every rank must call these (collectives)
+        double t_max = sync_max(epoch_time);
+        // means, not per-part maxes, so that compute + copy + mpi = time
+        epoch_time = sync_mean(epoch_time);
+        t_compute = sync_mean(t_compute);
+        t_copy = sync_mean(t_copy);
+        t_mpi = sync_mean(t_mpi);
 
         float loss = sync_sum(loss_sum) / (P * steps_per_epoch);   // mean over all ranks and steps
         
@@ -220,12 +239,12 @@ int main(int argc, char* argv[]){
                     epoch, loss, (double)correct / test.n,
                     epoch_time, t_compute, t_copy, t_mpi);
             log.push_back(EpochLog{epoch, loss, (double)correct / test.n,
-                                   epoch_time, t_compute, t_copy, t_mpi});
+                                   epoch_time, t_compute, t_copy, t_mpi, t_max});
         }
     }
 
     if (rank == 0){
-        write_log(log_path, log, P, B_global, sync_name, steps_per_epoch);
+        write_log(log_path, log, P, B_global, model_name, sync_name, steps_per_epoch);
     }
 
     // Weight checksum, printed by EVERY rank: all ranks must end with identical weights
