@@ -149,3 +149,12 @@ double sync_max(double t){
     return t;
 #endif
 }
+
+double sync_mean(double t){
+#ifdef USE_MPI
+    MPI_Allreduce(MPI_IN_PLACE, &t, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return t / g_P;
+#else
+    return t;
+#endif
+}
