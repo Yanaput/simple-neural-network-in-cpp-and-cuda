@@ -8,7 +8,10 @@
 #include <vector>
 
 static int threads_per_block = 256;
-const int TILE = 32;
+// Override with -DTILE=<n>, up to 32 (the block limit is 1024 threads).
+#ifndef TILE
+#define TILE 16
+#endif
 
 #define CUDA_CHECK(call) do{ \
     cudaError_t err = call; \
@@ -86,13 +89,13 @@ __global__ void cuda_softmax_grad(float* dZ, const float* Z, const float* Y, int
     float s = 0.f;
     float z_c = 0.f;
     for(int i = 0; i < cols; i++){
-        float e = exp(z[i]-max);
+        float e = expf(z[i]-max);
         dz[i] = e;
         s += e;
         if(y[i] == 1.0f) z_c = z[i];
     }
 
-    row_loss[t_idx] = max+log(s) - z_c;
+    row_loss[t_idx] = max+logf(s) - z_c;
     
     for(int i = 0; i < cols; i++){
         dz[i] = (dz[i]/s - y[i]) / rows;
