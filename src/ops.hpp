@@ -5,7 +5,7 @@
 // In train_gpu every float* below points to GPU memory.
 
 void   ops_init(int local_rank); //for gpu
-void   ops_sync(); // for gou
+void   ops_sync(); // for gpu
 
 float* ops_alloc(size_t n);
 void   ops_free(float* p);

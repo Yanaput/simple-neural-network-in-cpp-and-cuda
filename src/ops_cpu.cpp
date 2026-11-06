@@ -27,13 +27,28 @@ void ops_matmul(bool transA, bool transB, int M, int N, int K, const float* A, c
     if(transB){
         for (int i = 0; i < M; i++){
             for (int j = 0; j < N; j++){
-            float sum = 0.0f;
-                for (int k = 0; k < K; k++){
-                    int a_idx = transA ? k * M + i : i * K + k;
-                    int b_idx = j * K + k;
-                    sum += A[a_idx] * B[b_idx];
+                float sum = 0.0f;
+                const float* b_row = B + (size_t)j * K;
+                if(transA){
+                    for (int k = 0; k < K; k++){
+                        sum += A[(size_t)k * M + i] * b_row[k];
+                    }
                 }
-            C[i * N + j] = sum;
+                else{
+                    const float* a_row = A + (size_t)i * K;
+                    float lane[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+                    int k = 0;
+                    for (; k + 8 <= K; k += 8){
+                        for (int l = 0; l < 8; l++){
+                            lane[l] += a_row[k + l] * b_row[k + l];
+                        }
+                    }
+                    for (int l = 0; l < 8; l++) sum += lane[l];
+                    for (; k < K; k++){
+                        sum += a_row[k] * b_row[k];
+                    }
+                }
+                C[(size_t)i * N + j] = sum;
             }
         }
     }
@@ -89,7 +104,7 @@ float ops_softmax_grad(float* dZ, const float* Z, const float* Y, int rows, int 
         const float* y = Y + i*cols; // label of sample i
         float* dz = dZ + i*cols; // gradient of row
         float max = z[0];
-        double s = 0.f;   // sum_k exp(z[k] - max)
+        float s = 0.f;   // sum_k exp(z[k] - max)
         float z_c = 0.f;   // logit of the true class, z[c]
         // row max m_i
         for(int j = 0; j < cols; j++){
