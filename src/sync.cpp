@@ -51,15 +51,14 @@ void sync_finalize(){
 Sync parse_sync(const char* s){
     if(!std::strcmp(s, "none")) return Sync::None;
     if(!std::strcmp(s, "host")) return Sync::Host;
-    if(!std::strcmp(s, "perlayer")) return Sync::PerLayer;
     if(!std::strcmp(s, "cudaaware")) return Sync::CudaAware;
     if(!std::strcmp(s, "local")) return Sync::Local;
 
-    std::fprintf(stderr, "error: unknown --sync mode '%s' (valid: none, host, perlayer, cudaaware, local)\n", s);
+    std::fprintf(stderr, "error: unknown --sync mode '%s' (valid: none, host, cudaaware, local)\n", s);
     std::exit(1);
 }
 
-void sync_gradients(Sync mode, float* grads, size_t n, const std::vector<size_t>& offsets){
+void sync_gradients(Sync mode, float* grads, size_t n){
     if(mode == Sync::None || mode== Sync::Local) return;
 #ifdef USE_MPI
     static std::vector<float> host;
@@ -74,21 +73,6 @@ void sync_gradients(Sync mode, float* grads, size_t n, const std::vector<size_t>
             ops_download(host.data(), grads, n);
             t1 = now_s();
             MPI_Allreduce(MPI_IN_PLACE, host.data(), n, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-            t2 = now_s();
-            ops_upload(grads, host.data(), n);
-            ops_scale(grads, n, 1.0f/g_P);
-            ops_sync();
-            g_times.copy += (t1 - t0) + (now_s() - t2);
-            g_times.mpi  += t2 - t1;
-            break;
-
-        case Sync::PerLayer: // Allreduce per W or b
-            ops_download(host.data(), grads, n);
-            t1 = now_s();
-            for(size_t i = 0; i + 1 < offsets.size(); ++i){
-                MPI_Allreduce(MPI_IN_PLACE, host.data() + offsets[i], offsets[i + 1] - offsets[i]
-                , MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-            }
             t2 = now_s();
             ops_upload(grads, host.data(), n);
             ops_scale(grads, n, 1.0f/g_P);

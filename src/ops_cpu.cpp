@@ -114,13 +114,13 @@ float ops_softmax_grad(float* dZ, const float* Z, const float* Y, int rows, int 
         }
         // shifted exponentials (stored in dz as scratch), their sum s, and z[c]
         for(int j = 0; j < cols; j++){
-            float e =  std::exp(z[j]-max);
+            float e =  std::expf(z[j]-max);
             dz[j] = e;
             s += e;
             if(y[j] == 1.0f) z_c = z[j];
         }
         // row loss L_i = m_i + log(s) - z[c]
-        total += max + std::log(s) - z_c;
+        total += max + std::logf(s) - z_c;
 
         // turn the stored exponentials into the gradient (P - Y) / rows
         for(int j = 0; j < cols; j++){

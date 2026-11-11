@@ -72,7 +72,7 @@ int main(int argc, char* argv[]){
     int epochs = 10;                      // --epochs
     float lr = 0.05f;                    // --lr
     unsigned seed = 42;                   // --seed       same on every rank
-    Sync mode = Sync::None;               // --sync       none | host | perlayer | cudaaware | local
+    Sync mode = Sync::None;               // --sync       none | host | cudaaware | local
     int sync_every = 8;                   // --sync-every only used by Sync::Local
     std::string sync_name = "none";       // --sync value as typed, for the CSV
     std::string log_dir = "logs";         //log_dir
@@ -148,19 +148,27 @@ int main(int argc, char* argv[]){
     float* d_dout = ops_alloc((size_t)Bl * 10);
     
     std::mt19937 rng(seed);
+    // Each set is loaded, uploaded, and its host floats freed before the next is loaded:
+    // with ops_cpu.cpp the upload is a second host copy, so this keeps the per-rank peak
+    // and steady-state memory down (all ranks of a node load at the same time).
+    // Only n and test.label_ids are used from the host structs afterwards.
+    // Swapping with an empty vector actually releases the memory; clear() keeps the capacity.
     Mnist train = load_mnist(tr_img, tr_lbl);
-    Mnist test = load_mnist(te_img, te_lbl);
-
     float* d_train_x = ops_alloc((size_t)train.n * 784);
     float* d_train_y = ops_alloc((size_t)train.n * 10);
     ops_upload(d_train_x, train.images.data(), (size_t)train.n * 784);
     ops_upload(d_train_y, train.labels.data(), (size_t)train.n * 10);
-    
-    float* d_shuf_x = ops_alloc((size_t)Bl * 784);
-    float* d_shuf_y = ops_alloc((size_t)Bl * 10);
-    
+    std::vector<float>().swap(train.images);
+    std::vector<float>().swap(train.labels);
+
+    Mnist test = load_mnist(te_img, te_lbl);
     float* d_test_x = ops_alloc((size_t)test.n * 784);
     ops_upload(d_test_x, test.images.data(), (size_t)test.n * 784);
+    std::vector<float>().swap(test.images);
+    std::vector<float>().swap(test.labels);
+
+    float* d_shuf_x = ops_alloc((size_t)Bl * 784);
+    float* d_shuf_y = ops_alloc((size_t)Bl * 10);
     
 
 
@@ -195,7 +203,7 @@ int main(int argc, char* argv[]){
             loss_sum += loss;
 
             model.backward({d_dout, out.rows, 10});
-            sync_gradients(mode, model.grads, model.n_params, model.offsets);
+            sync_gradients(mode, model.grads, model.n_params);
             ops_sgd(model.params, model.grads, model.n_params, lr);
             int step = epoch * steps_per_epoch + i;
             
